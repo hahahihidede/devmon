@@ -172,6 +172,20 @@ export async function uploadScreenshot(file: File, deviceId: string = 'DEVICE-01
   });
 }
 
+export async function uploadScreenshotsBatch(files: File[], deviceId: string = 'DEVICE-01', notes: string = ''): Promise<any> {
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append('screenshots', file);
+  }
+  formData.append('deviceId', deviceId);
+  formData.append('notes', notes);
+
+  return apiRequest('/api/screenshots/upload', {
+    method: 'POST',
+    body: formData,
+  });
+}
+
 // System & Schema API
 export async function getSystemStatus(): Promise<SystemStatus> {
   return apiRequest<SystemStatus>('/api/system/status');
@@ -235,5 +249,11 @@ export async function downloadBackupManifest(): Promise<void> {
   a.click();
   document.body.removeChild(a);
   window.URL.revokeObjectURL(downloadUrl);
+}
+
+export async function clearAllData(): Promise<{ success: boolean; message: string }> {
+  return apiRequest('/api/system/clear-data', {
+    method: 'POST',
+  });
 }
 

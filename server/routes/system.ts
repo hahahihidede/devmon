@@ -11,6 +11,7 @@ import {
   setMonitoringStatus,
   getScreenshotRecords,
   getKeywordLogs,
+  clearDatabaseRecords,
 } from '../db.js';
 import { getStorageStats } from '../storage.js';
 
@@ -135,6 +136,16 @@ router.post('/seed-sample', requireAuth, async (req: AuthenticatedRequest, res: 
       activity: actRes,
       screenshotMetadata: metaRes,
     });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/system/clear-data
+router.post('/clear-data', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const result = await clearDatabaseRecords();
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

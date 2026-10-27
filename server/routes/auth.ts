@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { createSessionToken, validateCredentials, requireAuth, AuthenticatedRequest, getAdminUsername } from '../auth.js';
+import { createSessionToken, validateCredentials, requireAuth, AuthenticatedRequest } from '../auth.js';
 
 const router = Router();
 
@@ -40,15 +40,6 @@ router.post('/logout', requireAuth, (req: AuthenticatedRequest, res: Response) =
 router.get('/me', requireAuth, (req: AuthenticatedRequest, res: Response) => {
   res.json({
     user: req.user,
-  });
-});
-
-// GET /api/auth/default-credentials-hint
-// Gives administrator guidance on configured auth username
-router.get('/hint', (req: Request, res: Response) => {
-  res.json({
-    configuredUser: getAdminUsername(),
-    note: 'Gunakan akun yang telah dikonfigurasi pada environment variable AUTH_USERNAME & AUTH_PASSWORD.',
   });
 });
 

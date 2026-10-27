@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShieldCheck, Lock, User, AlertCircle, Server, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck, Lock, User, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { login } from '../services/api.js';
 import { UserSession } from '../types.js';
 
@@ -8,8 +8,8 @@ interface LoginViewProps {
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin_secure_password');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -26,11 +26,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleUseDefault = () => {
-    setUsername('admin');
-    setPassword('admin_secure_password');
   };
 
   return (
@@ -108,7 +103,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
             <button
               type="submit"
               disabled={loading}
-              className="w-full mt-2 py-2.5 px-4 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 text-white font-medium text-sm rounded-lg transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-400 flex items-center justify-center gap-2"
+              className="w-full mt-2 py-2.5 px-4 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 text-white font-medium text-sm rounded-lg transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-400 flex items-center justify-center gap-2 cursor-pointer"
             >
               {loading ? (
                 <>
@@ -120,22 +115,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
               )}
             </button>
           </form>
-
-          {/* Quick preset credentials helper */}
-          <div className="mt-5 pt-4 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-400">
-            <span className="flex items-center gap-1.5">
-              <Server className="w-3.5 h-3.5 text-slate-500" />
-              Kredensial Default:
-            </span>
-            <button
-              type="button"
-              onClick={handleUseDefault}
-              className="text-sky-400 hover:text-sky-300 font-mono hover:underline cursor-pointer"
-              title="Isi form otomatis dengan user: admin / pass: admin_secure_password"
-            >
-              admin : admin_secure_password
-            </button>
-          </div>
         </div>
 
         {/* Legal & Consent notice */}

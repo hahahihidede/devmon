@@ -2,8 +2,8 @@ import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 
 const AUTH_SECRET = process.env.AUTH_SECRET || 'dev_secret_key_terralogiq_device_activity_2026';
-const ADMIN_USERNAME = process.env.AUTH_USERNAME || 'admin';
-const ADMIN_PASSWORD = process.env.AUTH_PASSWORD || 'admin_secure_password';
+const ADMIN_USERNAME = process.env.AUTH_USERNAME || 'politech';
+const ADMIN_PASSWORD = process.env.AUTH_PASSWORD || 'Dikil561#';
 
 export interface UserSession {
   username: string;
@@ -80,13 +80,8 @@ export function requireAuth(req: AuthenticatedRequest, res: Response, next: Next
   next();
 }
 
-export function validateCredentials(username: string, password: string):boolean {
-  // Constant-time comparison for admin credentials
-  const validUser = username === ADMIN_USERNAME || username === 'admin@terralogiq.com';
-  const validPass = password === ADMIN_PASSWORD;
-  return validUser && validPass;
-}
-
-export function getAdminUsername(): string {
-  return ADMIN_USERNAME;
+export function validateCredentials(username: string, password: string): boolean {
+  const activeUser = process.env.AUTH_USERNAME || ADMIN_USERNAME;
+  const activePass = process.env.AUTH_PASSWORD || ADMIN_PASSWORD;
+  return username === activeUser && password === activePass;
 }

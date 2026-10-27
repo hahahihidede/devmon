@@ -51,134 +51,8 @@ export interface ScreenshotMetadata {
   notes?: string;
 }
 
-const mockActivityLogs: MockActivityLog[] = [
-  {
-    id: 'act-001',
-    keyword: 'dokumen_rahasia_finansial_q3.xlsx',
-    event_type: 'FILE_OPEN',
-    device_id: 'LAPTOP-OFFICE-04',
-    timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-    details: 'Aplikasi: MS Excel - Direktori: D:\\Financial_Reports',
-    consent_verified: true,
-  },
-  {
-    id: 'act-002',
-    keyword: 'https://internal.terralogiq.com/portal/audit',
-    event_type: 'URL_VISIT',
-    device_id: 'LAPTOP-OFFICE-04',
-    timestamp: new Date(Date.now() - 1000 * 60 * 42).toISOString(),
-    details: 'Browser: Google Chrome - Window: Portal Audit Internal',
-    consent_verified: true,
-  },
-  {
-    id: 'act-003',
-    keyword: 'terralogiq vpn connect asia-east',
-    event_type: 'SYSTEM_COMMAND',
-    device_id: 'WORKSTATION-ENG-12',
-    timestamp: new Date(Date.now() - 1000 * 60 * 95).toISOString(),
-    details: 'Terminal: bash - Status: CONNECTED',
-    consent_verified: true,
-  },
-  {
-    id: 'act-004',
-    keyword: 'revisi_kontrak_kerjasama_2026.pdf',
-    event_type: 'FILE_DOWNLOAD',
-    device_id: 'LAPTOP-LEGAL-02',
-    timestamp: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-    details: 'Ukuran: 2.4 MB - Sumber: Google Drive Workspace',
-    consent_verified: true,
-  },
-  {
-    id: 'act-005',
-    keyword: 'git commit -m "feat: audit logging policy v2"',
-    event_type: 'KEYSTROKE_EVENT',
-    device_id: 'WORKSTATION-ENG-12',
-    timestamp: new Date(Date.now() - 1000 * 60 * 250).toISOString(),
-    details: 'Repository: backend-audit-service - Branch: main',
-    consent_verified: true,
-  },
-  {
-    id: 'act-006',
-    keyword: 'docker compose -f docker-compose.prod.yml up -d',
-    event_type: 'SYSTEM_COMMAND',
-    device_id: 'SERVER-STAGING-01',
-    timestamp: new Date(Date.now() - 1000 * 60 * 320).toISOString(),
-    details: 'Pengguna: sysadmin (consent policy enforced)',
-    consent_verified: true,
-  },
-  {
-    id: 'act-007',
-    keyword: 'laporan_harian_kegiatan_oktober.docx',
-    event_type: 'FILE_PRINT',
-    device_id: 'LAPTOP-OFFICE-04',
-    timestamp: new Date(Date.now() - 1000 * 60 * 480).toISOString(),
-    details: 'Printer: Canon-iR-ADV-C3525 - Halaman: 1-12',
-    consent_verified: true,
-  },
-  {
-    id: 'act-008',
-    keyword: 'https://github.com/org/compliance-engine/pull/48',
-    event_type: 'URL_VISIT',
-    device_id: 'WORKSTATION-ENG-12',
-    timestamp: new Date(Date.now() - 1000 * 60 * 720).toISOString(),
-    details: 'Review pull request audit trail parser',
-    consent_verified: true,
-  },
-  {
-    id: 'act-009',
-    keyword: 'SELECT count(*) FROM user_consents WHERE is_active = true;',
-    event_type: 'KEYSTROKE_EVENT',
-    device_id: 'WORKSTATION-ENG-12',
-    timestamp: new Date(Date.now() - 1000 * 60 * 960).toISOString(),
-    details: 'Database IDE: DBeaver - Client: Read-only analytics',
-    consent_verified: true,
-  },
-  {
-    id: 'act-010',
-    keyword: 'ssh -i ~/.ssh/bastion deploy@10.0.1.5',
-    event_type: 'SYSTEM_COMMAND',
-    device_id: 'WORKSTATION-ENG-12',
-    timestamp: new Date(Date.now() - 1000 * 60 * 1440).toISOString(),
-    details: 'Session ID: ssh-session-9812 - Authorized maintenance',
-    consent_verified: true,
-  },
-];
-
-const mockScreenshots: ScreenshotMetadata[] = [
-  {
-    id: 'scr-001',
-    filename: 'screen_sample_01.jpg',
-    original_filename: 'display_audit_workstation12_1020.jpg',
-    timestamp: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
-    file_size: 245800,
-    mime_type: 'image/jpeg',
-    storage_status: 'AVAILABLE',
-    device_id: 'WORKSTATION-ENG-12',
-    notes: 'Aktivitas desktop rutin - consent token active',
-  },
-  {
-    id: 'scr-002',
-    filename: 'screen_sample_02.jpg',
-    original_filename: 'display_audit_laptop04_1100.jpg',
-    timestamp: new Date(Date.now() - 1000 * 60 * 65).toISOString(),
-    file_size: 312450,
-    mime_type: 'image/jpeg',
-    storage_status: 'AVAILABLE',
-    device_id: 'LAPTOP-OFFICE-04',
-    notes: 'Aplikasi akuntansi dan lembar kerja',
-  },
-  {
-    id: 'scr-003',
-    filename: 'screen_sample_03.jpg',
-    original_filename: 'display_audit_legal02_1345.jpg',
-    timestamp: new Date(Date.now() - 1000 * 60 * 210).toISOString(),
-    file_size: 289100,
-    mime_type: 'image/jpeg',
-    storage_status: 'AVAILABLE',
-    device_id: 'LAPTOP-LEGAL-02',
-    notes: 'Verifikasi klausul kepatuhan regulasi',
-  },
-];
+const mockActivityLogs: MockActivityLog[] = [];
+const mockScreenshots: ScreenshotMetadata[] = [];
 
 let isMonitoringActive = true;
 
@@ -299,6 +173,40 @@ export async function ensureScreenshotMetadataTable(): Promise<{ success: boolea
     return { success: true, created: false, message: 'Tabel screenshot_metadata sudah tersedia.' };
   } catch (err: any) {
     return { success: false, message: err.message };
+  } finally {
+    client.release();
+  }
+}
+
+// Clear/Truncate database records safely
+export async function clearDatabaseRecords(): Promise<{ success: boolean; message: string }> {
+  if (!pool || !isConnected) {
+    mockActivityLogs.length = 0;
+    mockScreenshots.length = 0;
+    return { success: true, message: 'Data memori lokal berhasil dikosongkan.' };
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      DO $$ 
+      BEGIN
+        IF EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'events') THEN
+          TRUNCATE TABLE events RESTART IDENTITY;
+        END IF;
+        IF EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'screenshot_metadata') THEN
+          TRUNCATE TABLE screenshot_metadata;
+        END IF;
+        IF EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'device_activity_logs') THEN
+          TRUNCATE TABLE device_activity_logs;
+        END IF;
+      END $$;
+    `);
+    mockActivityLogs.length = 0;
+    mockScreenshots.length = 0;
+    return { success: true, message: 'Seluruh data rekaman (events & screenshot) berhasil dikosongkan dari database.' };
+  } catch (err: any) {
+    return { success: false, message: 'Gagal mengosongkan database: ' + err.message };
   } finally {
     client.release();
   }

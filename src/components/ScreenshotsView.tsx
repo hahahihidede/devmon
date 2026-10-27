@@ -19,7 +19,7 @@ import {
   AlertCircle,
   FileText,
 } from 'lucide-react';
-import { fetchScreenshots, getScreenshotImageUrl, uploadScreenshot, ScreenshotsResponse } from '../services/api.js';
+import { fetchScreenshots, getScreenshotImageUrl, uploadScreenshot, uploadScreenshotsBatch, ScreenshotsResponse } from '../services/api.js';
 import { ScreenshotItem } from '../types.js';
 import { formatToWIB, formatDateOnlyWIB, formatTimeOnlyWIB, formatRelativeTime, formatBytes } from '../utils/date.js';
 
@@ -43,8 +43,9 @@ export const ScreenshotsView: React.FC = () => {
 
   // Upload modal state
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadDeviceId, setUploadDeviceId] = useState('WORKSTATION-ENG-12');
+  const [uploadTab, setUploadTab] = useState<'upload' | 'scp' | 'script'>('upload');
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [uploadDeviceId, setUploadDeviceId] = useState('DEVICE-01');
   const [uploadNotes, setUploadNotes] = useState('');
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<{ text: string; isError?: boolean } | null>(null);
@@ -82,8 +83,8 @@ export const ScreenshotsView: React.FC = () => {
 
   const handleUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!uploadFile) {
-      setUploadMessage({ text: 'Pilih file screenshot (JPG atau PNG) terlebih dahulu.', isError: true });
+    if (uploadFiles.length === 0) {
+      setUploadMessage({ text: 'Pilih minimal satu file screenshot (PNG atau JPG) terlebih dahulu.', isError: true });
       return;
     }
 
@@ -91,15 +92,17 @@ export const ScreenshotsView: React.FC = () => {
     setUploadMessage(null);
 
     try {
-      const res = await uploadScreenshot(uploadFile, uploadDeviceId, uploadNotes);
-      setUploadMessage({ text: 'Screenshot berhasil disimpan ke filesystem VM dan metadata ke database!' });
-      setUploadFile(null);
+      const res = await uploadScreenshotsBatch(uploadFiles, uploadDeviceId, uploadNotes);
+      setUploadMessage({
+        text: `Berhasil! ${res.message || `${uploadFiles.length} screenshot tersimpan di /srv/app-data/screenshots/ VM.`}`,
+      });
+      setUploadFiles([]);
       if (fileInputRef.current) fileInputRef.current.value = '';
       setTimeout(() => {
         setShowUploadModal(false);
         setUploadMessage(null);
         loadData();
-      }, 1200);
+      }, 1500);
     } catch (err: any) {
       setUploadMessage({ text: err.message || 'Gagal mengunggah screenshot.', isError: true });
     } finally {
@@ -577,113 +580,231 @@ export const ScreenshotsView: React.FC = () => {
 
       {/* Test Upload Modal */}
       {showUploadModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-6 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 shrink-0">
               <h3 className="text-sm font-semibold text-white flex items-center gap-2">
                 <Upload className="w-4 h-4 text-sky-400" />
-                Uji Unggah Screenshot (Ingestion Test)
+                Sinkronisasi Screenshot dari Laptop ke Web
               </h3>
               <button
                 onClick={() => {
                   setShowUploadModal(false);
                   setUploadMessage(null);
                 }}
-                className="text-slate-400 hover:text-white p-1 rounded-md hover:bg-slate-800"
+                className="text-slate-400 hover:text-white p-1 rounded-md hover:bg-slate-800 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <p className="text-xs text-slate-400 mt-3 leading-relaxed">
-              Alur pengujian: File gambar JPG/PNG akan disimpan langsung di direktori disk VM lokal (<code className="text-sky-300">/srv/app-data/screenshots/</code>), dan metadata disimpan ke tabel PostgreSQL <code className="text-sky-300">screenshot_metadata</code>.
-            </p>
-
-            {uploadMessage && (
-              <div
-                className={`mt-4 p-3 rounded-lg text-xs flex items-center gap-2 ${
-                  uploadMessage.isError
-                    ? 'bg-rose-950/60 border border-rose-800 text-rose-300'
-                    : 'bg-emerald-950/60 border border-emerald-800 text-emerald-300'
+            {/* Navigation Tabs */}
+            <div className="flex border-b border-slate-800 mt-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => setUploadTab('upload')}
+                className={`flex-1 py-2 text-xs font-medium border-b-2 transition-colors cursor-pointer ${
+                  uploadTab === 'upload'
+                    ? 'border-sky-500 text-sky-400 bg-sky-950/20'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
                 }`}
               >
-                {uploadMessage.isError ? (
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                ) : (
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                )}
-                <span>{uploadMessage.text}</span>
-              </div>
-            )}
+                1. Unggah Langsung (Web)
+              </button>
+              <button
+                type="button"
+                onClick={() => setUploadTab('scp')}
+                className={`flex-1 py-2 text-xs font-medium border-b-2 transition-colors cursor-pointer ${
+                  uploadTab === 'scp'
+                    ? 'border-sky-500 text-sky-400 bg-sky-950/20'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                2. SCP / FileZilla (Massal)
+              </button>
+              <button
+                type="button"
+                onClick={() => setUploadTab('script')}
+                className={`flex-1 py-2 text-xs font-medium border-b-2 transition-colors cursor-pointer ${
+                  uploadTab === 'script'
+                    ? 'border-sky-500 text-sky-400 bg-sky-950/20'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                3. Auto-Sync Windows
+              </button>
+            </div>
 
-            <form onSubmit={handleUploadSubmit} className="mt-4 space-y-3.5 text-xs">
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">
-                  Pilih Gambar (JPG atau PNG, maks 15MB):
-                </label>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  accept="image/jpeg,image/png,image/jpg"
-                  required
-                  onChange={(e) => {
-                    if (e.target.files && e.target.files[0]) {
-                      setUploadFile(e.target.files[0]);
-                    }
-                  }}
-                  className="w-full text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-sky-600 file:text-white hover:file:bg-sky-500 cursor-pointer"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Device ID:</label>
-                <input
-                  type="text"
-                  value={uploadDeviceId}
-                  onChange={(e) => setUploadDeviceId(e.target.value)}
-                  placeholder="WORKSTATION-ENG-12"
-                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-md text-slate-200 focus:outline-none focus:border-sky-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Catatan Tambahan:</label>
-                <input
-                  type="text"
-                  value={uploadNotes}
-                  onChange={(e) => setUploadNotes(e.target.value)}
-                  placeholder="Misal: Uji ingestion kepatuhan audit"
-                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-md text-slate-200 focus:outline-none focus:border-sky-500"
-                />
-              </div>
-
-              <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowUploadModal(false)}
-                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium cursor-pointer"
+            <div className="overflow-y-auto mt-4 space-y-3.5 pr-1 text-xs">
+              {uploadMessage && (
+                <div
+                  className={`p-3 rounded-lg text-xs flex items-center gap-2 ${
+                    uploadMessage.isError
+                      ? 'bg-rose-950/60 border border-rose-800 text-rose-300'
+                      : 'bg-emerald-950/60 border border-emerald-800 text-emerald-300'
+                  }`}
                 >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  disabled={uploadLoading || !uploadFile}
-                  className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer flex items-center gap-1.5"
-                >
-                  {uploadLoading ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                      <span>Menyimpan ke VM Disk...</span>
-                    </>
+                  {uploadMessage.isError ? (
+                    <AlertCircle className="w-4 h-4 shrink-0" />
                   ) : (
-                    <>
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>Simpan Berkas</span>
-                    </>
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
                   )}
-                </button>
-              </div>
-            </form>
+                  <span>{uploadMessage.text}</span>
+                </div>
+              )}
+
+              {uploadTab === 'upload' && (
+                <form onSubmit={handleUploadSubmit} className="space-y-3.5">
+                  <p className="text-slate-300 leading-relaxed">
+                    Pilih file screenshot dari folder <code className="bg-slate-950 px-1.5 py-0.5 rounded text-sky-300 font-mono">screenshots</code> di laptop Anda. Nama file asli (seperti <code className="text-emerald-400 font-mono">screenshot_keyword_*.png</code>) akan dipertahankan sehingga otomatis cocok dengan log database PostgreSQL.
+                  </p>
+
+                  <div className="p-4 border-2 border-dashed border-slate-700 hover:border-sky-500/70 rounded-xl bg-slate-950/60 text-center transition-colors">
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      multiple
+                      accept="image/jpeg,image/png,image/jpg"
+                      required
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files.length > 0) {
+                          setUploadFiles(Array.from(e.target.files));
+                        }
+                      }}
+                      className="hidden"
+                      id="batch-file-input"
+                    />
+                    <label htmlFor="batch-file-input" className="cursor-pointer block">
+                      <Upload className="w-8 h-8 text-sky-400 mx-auto mb-2" />
+                      <span className="font-semibold text-white block">
+                        Klik untuk memilih berkas screenshot (Bisa pilih banyak sekaligus)
+                      </span>
+                      <span className="text-slate-400 text-[11px] mt-1 block">
+                        Format didukung: PNG, JPG (maks. 50 file per batch)
+                      </span>
+                    </label>
+
+                    {uploadFiles.length > 0 && (
+                      <div className="mt-3 p-2 bg-sky-950/40 border border-sky-800/50 rounded text-sky-300 text-left font-mono text-[11px] max-h-24 overflow-y-auto">
+                        <strong>{uploadFiles.length} file dipilih:</strong>
+                        <ul className="list-disc list-inside mt-1 space-y-0.5 text-slate-300">
+                          {uploadFiles.slice(0, 5).map((f, i) => (
+                            <li key={i}>{f.name} ({(f.size / 1024).toFixed(0)} KB)</li>
+                          ))}
+                          {uploadFiles.length > 5 && <li>...dan {uploadFiles.length - 5} file lainnya</li>}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-300 font-medium mb-1">Device ID:</label>
+                      <input
+                        type="text"
+                        value={uploadDeviceId}
+                        onChange={(e) => setUploadDeviceId(e.target.value)}
+                        placeholder="DEVICE-01"
+                        className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-md text-slate-200 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 font-medium mb-1">Catatan Tambahan:</label>
+                      <input
+                        type="text"
+                        value={uploadNotes}
+                        onChange={(e) => setUploadNotes(e.target.value)}
+                        placeholder="Sinkronisasi manual"
+                        className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-md text-slate-200"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-2 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowUploadModal(false)}
+                      className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={uploadLoading || uploadFiles.length === 0}
+                      className="px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer flex items-center gap-1.5"
+                    >
+                      {uploadLoading ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                          <span>Menyimpan ke VM Disk...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Unggah {uploadFiles.length > 0 ? `(${uploadFiles.length} File)` : ''}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {uploadTab === 'scp' && (
+                <div className="space-y-3">
+                  <p className="text-slate-300 leading-relaxed">
+                    Jika Anda memiliki puluhan atau ratusan file di laptop Windows, cara paling cepat adalah menyalin satu folder penuh langsung ke direktori penyimpanan VM (<code className="text-sky-300 font-mono">/srv/app-data/screenshots/</code>).
+                  </p>
+
+                  <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 space-y-1.5">
+                    <span className="font-semibold text-white block">Perintah PowerShell / CMD Windows:</span>
+                    <pre className="p-2.5 bg-black rounded font-mono text-[11px] text-emerald-400 overflow-x-auto whitespace-pre">
+                      scp -r C:\Path\Ke\screenshots\* ubuntu@IP_VM_ANDA:/srv/app-data/screenshots/
+                    </pre>
+                  </div>
+
+                  <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 space-y-1.5">
+                    <span className="font-semibold text-white block">Atau Menggunakan FileZilla / WinSCP (GUI):</span>
+                    <ol className="list-decimal list-inside text-slate-300 space-y-1 pl-1">
+                      <li>Buka WinSCP / FileZilla di Windows.</li>
+                      <li>Koneksikan dengan protokol <strong>SFTP</strong>, Host: <code className="text-sky-300 font-mono">IP_VM_ANDA</code>, Port: 22, User: <code className="text-sky-300 font-mono">ubuntu</code>.</li>
+                      <li>Di panel kanan (server), buka folder: <code className="text-emerald-400 font-mono">/srv/app-data/screenshots/</code>.</li>
+                      <li>Drag &amp; drop seluruh isi folder <code className="text-amber-300 font-mono">screenshots</code> dari laptop Anda ke sana.</li>
+                    </ol>
+                  </div>
+                </div>
+              )}
+
+              {uploadTab === 'script' && (
+                <div className="space-y-3">
+                  <p className="text-slate-300 leading-relaxed">
+                    Aplikasi background Windows dapat langsung menembakkan setiap screenshot baru ke REST API dashboard menggunakan endpoint ingest.
+                  </p>
+
+                  <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 space-y-1.5">
+                    <span className="font-semibold text-white block">Endpoint Ingest HTTP POST:</span>
+                    <div className="p-2 bg-black rounded font-mono text-[11px] text-sky-400">
+                      POST http://IP_VM_ANDA:3000/api/screenshots/ingest
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 space-y-1.5">
+                    <span className="font-semibold text-white block">Contoh Kode Python (di Windows Client):</span>
+                    <pre className="p-2.5 bg-black rounded font-mono text-[11px] text-emerald-400 overflow-x-auto whitespace-pre leading-relaxed">
+{`import requests
+
+def upload_screenshot_to_web(image_path):
+    url = "http://IP_VM_ANDA:3000/api/screenshots/ingest"
+    with open(image_path, "rb") as f:
+        files = {"screenshot": f}
+        # Sertakan x-api-key jika dikonfigurasi di .env
+        headers = {"x-api-key": "devmon-sync-secret-2026"}
+        res = requests.post(url, files=files, headers=headers)
+        return res.status_code == 201`}
+                    </pre>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

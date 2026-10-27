@@ -11,6 +11,7 @@ import {
   Key,
   Calendar,
   Lock,
+  Trash2,
 } from 'lucide-react';
 import {
   getSchemaInspection,
@@ -18,6 +19,7 @@ import {
   seedSampleData,
   testDatabaseConnection,
   downloadBackupManifest,
+  clearAllData,
 } from '../services/api.js';
 import { SchemaInspectionResult, TableSchemaInfo } from '../types.js';
 
@@ -60,6 +62,12 @@ export const DbInspectorModal: React.FC<DbInspectorModalProps> = ({
     try {
       const res = await getSchemaInspection();
       setData(res.schema);
+      if (res.schema.dbConfigSafe) {
+        setDbHost(res.schema.dbConfigSafe.host || '127.0.0.1');
+        setDbPort(String(res.schema.dbConfigSafe.port || '5432'));
+        setDbUser(res.schema.dbConfigSafe.user || 'postgres');
+        setDbName(res.schema.dbConfigSafe.database || 'device_activity_db');
+      }
       if (res.schema.activeKeywordTable) {
         setSelectedTable(res.schema.activeKeywordTable);
       } else if (res.schema.tables.length > 0) {
@@ -146,6 +154,26 @@ export const DbInspectorModal: React.FC<DbInspectorModalProps> = ({
       setActionMessage({ text: err.message || 'Gagal mengunduh cadangan.', isError: true });
     } finally {
       setDownloadingBackup(false);
+    }
+  };
+
+  const handleClearData = async () => {
+    const confirmed = window.confirm(
+      'PERINGATAN: Apakah Anda yakin ingin mengosongkan seluruh data aktivitas & screenshot dari database PostgreSQL? Tindakan ini akan menghapus semua log secara permanen.'
+    );
+    if (!confirmed) return;
+
+    setLoading(true);
+    setActionMessage(null);
+    try {
+      const res = await clearAllData();
+      setActionMessage({ text: res.message });
+      await loadSchema();
+      if (onSchemaUpdated) onSchemaUpdated();
+    } catch (err: any) {
+      setActionMessage({ text: err.message || 'Gagal membersihkan data.', isError: true });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -346,9 +374,19 @@ export const DbInspectorModal: React.FC<DbInspectorModalProps> = ({
           {data?.error && (
             <div className="p-3 bg-amber-950/40 border border-amber-800/60 rounded-lg text-amber-200 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
-              <div>
+              <div className="flex-1">
                 <span className="font-semibold block">Catatan Koneksi Database:</span>
-                <span className="text-[11px]">{data.error}</span>
+                <span className="text-[11px] font-mono">{data.error}</span>
+                {data.error.includes('password authentication failed') && (
+                  <div className="mt-2 text-[11px] text-amber-200/95 leading-relaxed bg-black/40 p-2.5 rounded-lg border border-amber-800/50 space-y-1">
+                    <p className="font-semibold text-amber-300">💡 Penyebab &amp; Cara Mengatasi:</p>
+                    <p>PostgreSQL menolak password yang dimasukkan. Anda dapat memperbaikinya langsung tanpa restart:</p>
+                    <ul className="list-disc list-inside space-y-0.5 text-slate-300 pl-1">
+                      <li>Klik tombol <span className="text-sky-300 font-medium">"Ubah / Uji Koneksi DB"</span> di atas, ketik password database PostgreSQL yang sebenarnya, lalu klik <span className="text-emerald-300 font-medium">"Uji &amp; Terapkan Koneksi"</span>.</li>
+                      <li>Atau edit berkas <span className="font-mono text-amber-300">.env</span> di VM. Jika password mengandung tanda pagar (<code className="text-white font-mono">#</code>) atau simbol, wajib dibungkus tanda kutip dua: <code className="text-emerald-300 font-mono">PGPASSWORD="password_asli_anda"</code>.</li>
+                    </ul>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -512,6 +550,27 @@ export const DbInspectorModal: React.FC<DbInspectorModalProps> = ({
             >
               <Sparkles className="w-3.5 h-3.5 text-sky-400" />
               <span>{seeding ? 'Memproses...' : 'Inisialisasi Tabel'}</span>
+            </button>
+          </div>
+
+          {/* Clear / Reset All Data Section */}
+          <div className="p-4 bg-rose-950/30 border border-rose-900/50 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div>
+              <h5 className="font-semibold text-rose-300 flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-rose-400" />
+                Kosongkan Seluruh Data (Reset Database)
+              </h5>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Menghapus semua entri aktivitas pada tabel <code className="text-rose-300">events</code> dan <code className="text-rose-300">screenshot_metadata</code> agar bersih seperti baru.
+              </p>
+            </div>
+            <button
+              onClick={handleClearData}
+              disabled={loading}
+              className="px-3.5 py-2 bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-800 rounded-lg font-medium transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+              <span>Bersihkan Seluruh Data</span>
             </button>
           </div>
         </div>

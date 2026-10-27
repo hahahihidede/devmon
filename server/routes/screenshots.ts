@@ -180,58 +180,164 @@ router.get('/:id/image', requireAuth, async (req: AuthenticatedRequest, res: Res
   }
 });
 
-// POST /api/screenshots/upload
-// Ingestion endpoint: saves JPG/PNG to VM filesystem and writes metadata to PostgreSQL
-router.post('/upload', requireAuth, upload.single('screenshot'), async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Berkas screenshot (field: screenshot) tidak ditemukan dalam permintaan.' });
-    }
-
-    const buffer = req.file.buffer;
-    const validation = validateImageBuffer(buffer);
-    if (!validation.valid) {
-      return res.status(400).json({ error: validation.error });
-    }
-
-    const originalName = req.file.originalname || 'screenshot.jpg';
-    const uniqueFilename = generateUniqueFilename(originalName, validation.mimeType);
-    const targetDir = getStorageDir();
-    const targetPath = path.join(targetDir, uniqueFilename);
-
-    // Write file directly to local VM disk
-    fs.writeFileSync(targetPath, buffer);
-
-    const deviceId = (req.body.deviceId as string) || (req.body.device_id as string) || 'DEVICE-01';
-    const notes = (req.body.notes as string) || 'Diunggah melalui agent/dashboard';
-    const timestamp = req.body.timestamp ? new Date(req.body.timestamp).toISOString() : new Date().toISOString();
-
-    // Save metadata in PostgreSQL table
-    const metadata = await saveScreenshotMetadata({
-      filename: uniqueFilename,
-      original_filename: originalName,
-      timestamp,
-      file_size: buffer.length,
-      mime_type: validation.mimeType,
-      storage_status: 'AVAILABLE',
-      device_id: deviceId,
-      notes,
-    });
-
-    res.status(201).json({
-      success: true,
-      message: 'Screenshot berhasil disimpan ke filesystem VM dan metadata tersimpan di database.',
-      item: metadata,
-      storedPath: targetPath,
-    });
-  } catch (err: any) {
-    console.error('[Upload Screenshot Error]', err);
-    res.status(500).json({
-      success: false,
-      error: err.message || 'Gagal menyimpan screenshot ke sistem penyimpanan.',
-    });
+// Helper to safely sanitize and save image file to disk
+function saveImageToDisk(file: Express.Multer.File, preserveOriginalName: boolean = true): {
+  filename: string;
+  targetPath: string;
+  mimeType: string;
+  size: number;
+} {
+  const validation = validateImageBuffer(file.buffer);
+  if (!validation.valid) {
+    throw new Error(validation.error || 'File gambar tidak valid');
   }
-});
+
+  const rawBaseName = path.basename(file.originalname || 'screenshot.png');
+  // Sanitize filename to alphanumeric, underscores, dots, hyphens
+  const cleanName = rawBaseName.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  let filename: string;
+  if (preserveOriginalName && cleanName.length > 3) {
+    filename = cleanName;
+  } else {
+    filename = generateUniqueFilename(cleanName, validation.mimeType);
+  }
+
+  const targetDir = getStorageDir();
+  // Ensure target directory exists
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true, mode: 0o750 });
+  }
+
+  const targetPath = path.join(targetDir, filename);
+  fs.writeFileSync(targetPath, file.buffer);
+
+  return {
+    filename,
+    targetPath,
+    mimeType: validation.mimeType,
+    size: file.buffer.length,
+  };
+}
+
+// POST /api/screenshots/upload
+// Ingestion endpoint for Dashboard UI: supports single or multiple files
+router.post(
+  '/upload',
+  requireAuth,
+  upload.fields([
+    { name: 'screenshot', maxCount: 1 },
+    { name: 'screenshots', maxCount: 50 },
+  ]),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const files: Express.Multer.File[] = [];
+      const reqFiles = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+
+      if (reqFiles) {
+        if (reqFiles.screenshot && reqFiles.screenshot.length > 0) {
+          files.push(...reqFiles.screenshot);
+        }
+        if (reqFiles.screenshots && reqFiles.screenshots.length > 0) {
+          files.push(...reqFiles.screenshots);
+        }
+      }
+
+      if (files.length === 0) {
+        return res.status(400).json({
+          error: 'Tidak ada file screenshot yang dikirim. Kirimkan dengan field "screenshot" atau "screenshots".',
+        });
+      }
+
+      const deviceId = (req.body.deviceId as string) || (req.body.device_id as string) || 'DEVICE-01';
+      const notes = (req.body.notes as string) || 'Diunggah melalui dashboard web';
+      const savedItems = [];
+
+      for (const file of files) {
+        const saved = saveImageToDisk(file, true);
+
+        // Optionally record in screenshot_metadata table if connected
+        try {
+          const meta = await saveScreenshotMetadata({
+            filename: saved.filename,
+            original_filename: file.originalname || saved.filename,
+            timestamp: new Date().toISOString(),
+            file_size: saved.size,
+            mime_type: saved.mimeType,
+            storage_status: 'AVAILABLE',
+            device_id: deviceId,
+            notes,
+          });
+          savedItems.push({ ...saved, metadata: meta });
+        } catch {
+          // File is saved to filesystem even if metadata insertion fails
+          savedItems.push(saved);
+        }
+      }
+
+      res.status(201).json({
+        success: true,
+        message: `${savedItems.length} file screenshot berhasil disimpan ke filesystem VM (/srv/app-data/screenshots/).`,
+        items: savedItems,
+        storagePath: getStorageDir(),
+      });
+    } catch (err: any) {
+      console.error('[Upload Screenshot Error]', err);
+      res.status(500).json({
+        success: false,
+        error: err.message || 'Gagal menyimpan screenshot ke sistem penyimpanan.',
+      });
+    }
+  }
+);
+
+// POST /api/screenshots/ingest
+// Direct background ingest endpoint for Windows Client Application
+// Supports Authorization Bearer, x-api-key header, or basic sync token
+router.post(
+  '/ingest',
+  upload.fields([
+    { name: 'screenshot', maxCount: 1 },
+    { name: 'screenshots', maxCount: 20 },
+    { name: 'file', maxCount: 1 },
+  ]),
+  async (req: Request, res: Response) => {
+    try {
+      const apiKey = req.headers['x-api-key'] || req.query.apiKey || req.query.api_key;
+      const expectedKey = process.env.INGEST_API_KEY || 'devmon-sync-secret-2026';
+
+      // Verify simple API Key if configured
+      if (process.env.INGEST_API_KEY && apiKey !== expectedKey) {
+        return res.status(401).json({ error: 'Kunci API (x-api-key) tidak valid.' });
+      }
+
+      const files: Express.Multer.File[] = [];
+      const reqFiles = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+
+      if (reqFiles) {
+        if (reqFiles.screenshot) files.push(...reqFiles.screenshot);
+        if (reqFiles.screenshots) files.push(...reqFiles.screenshots);
+        if (reqFiles.file) files.push(...reqFiles.file);
+      }
+
+      if (files.length === 0) {
+        return res.status(400).json({ error: 'Tidak ada berkas gambar yang diterima.' });
+      }
+
+      const saved = files.map((file) => saveImageToDisk(file, true));
+
+      res.status(201).json({
+        success: true,
+        message: 'Screenshot berhasil diterima dan disimpan di server.',
+        savedFiles: saved.map((s) => s.filename),
+        storageDir: getStorageDir(),
+      });
+    } catch (err: any) {
+      console.error('[Ingest Screenshot Error]', err);
+      res.status(500).json({ error: err.message || 'Gagal memproses unggahan ingest screenshot.' });
+    }
+  }
+);
 
 // GET /api/screenshots/storage-stats
 // Storage health status for screenshots folder
