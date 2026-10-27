@@ -3,53 +3,75 @@ import path from 'path';
 import crypto from 'crypto';
 
 // Preferred production path on Ubuntu VM, or fallback to relative ./data/screenshots
-const PREFERRED_DIR = process.env.SCREENSHOTS_DIR || '/srv/app-data/screenshots/';
-const FALLBACK_DIR = path.resolve(process.cwd(), 'data', 'screenshots');
+export const PREFERRED_DIR = process.env.SCREENSHOTS_DIR || '/srv/app-data/screenshots/';
+export const FALLBACK_DIR = path.resolve(process.cwd(), 'data', 'screenshots');
 
 let activeStorageDir = PREFERRED_DIR;
 
 // Determine and initialize safe storage directory
 export function initStorage(): { path: string; isPreferred: boolean; isWritable: boolean; error?: string } {
+  // First test if PREFERRED_DIR is usable and writable
   try {
-    // Try preferred directory first
     if (!fs.existsSync(PREFERRED_DIR)) {
-      try {
-        fs.mkdirSync(PREFERRED_DIR, { recursive: true, mode: 0o750 });
-      } catch (err: any) {
-        console.warn(`[Storage] Cannot create preferred dir ${PREFERRED_DIR} (${err.message}). Using fallback: ${FALLBACK_DIR}`);
-        activeStorageDir = FALLBACK_DIR;
-      }
-    } else {
-      activeStorageDir = PREFERRED_DIR;
+      fs.mkdirSync(PREFERRED_DIR, { recursive: true, mode: 0o775 });
     }
-
-    // If active storage is fallback or preferred failed, ensure fallback exists
-    if (!fs.existsSync(activeStorageDir)) {
-      fs.mkdirSync(activeStorageDir, { recursive: true, mode: 0o750 });
-    }
-
-    // Test write permission
-    const testFile = path.join(activeStorageDir, `.test_write_${Date.now()}`);
+    // Test write permission on PREFERRED_DIR
+    const testFile = path.join(PREFERRED_DIR, `.test_write_${Date.now()}`);
     fs.writeFileSync(testFile, 'test');
     fs.unlinkSync(testFile);
 
+    activeStorageDir = PREFERRED_DIR;
     return {
       path: activeStorageDir,
-      isPreferred: activeStorageDir === PREFERRED_DIR,
+      isPreferred: true,
       isWritable: true,
     };
   } catch (err: any) {
-    console.error(`[Storage] Storage directory error:`, err);
-    return {
-      path: activeStorageDir,
-      isPreferred: false,
-      isWritable: false,
-      error: err.message,
-    };
+    console.warn(`[Storage] Preferred directory ${PREFERRED_DIR} is not writable (${err.message}). Falling back to: ${FALLBACK_DIR}`);
+    
+    // Fallback to FALLBACK_DIR inside application directory
+    try {
+      if (!fs.existsSync(FALLBACK_DIR)) {
+        fs.mkdirSync(FALLBACK_DIR, { recursive: true, mode: 0o775 });
+      }
+      const testFile = path.join(FALLBACK_DIR, `.test_write_${Date.now()}`);
+      fs.writeFileSync(testFile, 'test');
+      fs.unlinkSync(testFile);
+
+      activeStorageDir = FALLBACK_DIR;
+      return {
+        path: activeStorageDir,
+        isPreferred: false,
+        isWritable: true,
+        error: `Preferred dir ${PREFERRED_DIR} not writable: ${err.message}. Menggunakan fallback lokal.`,
+      };
+    } catch (fallbackErr: any) {
+      console.error(`[Storage] Fallback directory also failed:`, fallbackErr);
+      return {
+        path: activeStorageDir,
+        isPreferred: false,
+        isWritable: false,
+        error: fallbackErr.message,
+      };
+    }
   }
 }
 
 export function getStorageDir(): string {
+  // Re-verify if preferred directory became writable (e.g. after user ran chown/chmod)
+  if (activeStorageDir !== PREFERRED_DIR) {
+    try {
+      if (fs.existsSync(PREFERRED_DIR)) {
+        const testFile = path.join(PREFERRED_DIR, `.perm_check_${Date.now()}`);
+        fs.writeFileSync(testFile, 'ok');
+        fs.unlinkSync(testFile);
+        activeStorageDir = PREFERRED_DIR;
+        console.log(`[Storage] Detected write permission on ${PREFERRED_DIR}! Restored as active storage.`);
+      }
+    } catch {
+      // Still not writable, keep fallback
+    }
+  }
   return activeStorageDir;
 }
 

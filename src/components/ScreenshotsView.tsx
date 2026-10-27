@@ -638,18 +638,28 @@ export const ScreenshotsView: React.FC = () => {
             <div className="overflow-y-auto mt-4 space-y-3.5 pr-1 text-xs">
               {uploadMessage && (
                 <div
-                  className={`p-3 rounded-lg text-xs flex items-center gap-2 ${
+                  className={`p-3 rounded-lg text-xs flex flex-col gap-2 ${
                     uploadMessage.isError
                       ? 'bg-rose-950/60 border border-rose-800 text-rose-300'
                       : 'bg-emerald-950/60 border border-emerald-800 text-emerald-300'
                   }`}
                 >
-                  {uploadMessage.isError ? (
-                    <AlertCircle className="w-4 h-4 shrink-0" />
-                  ) : (
-                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <div className="flex items-start gap-2">
+                    {uploadMessage.isError ? (
+                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                    )}
+                    <span className="break-words leading-relaxed">{uploadMessage.text}</span>
+                  </div>
+                  {uploadMessage.isError && (uploadMessage.text.includes('EACCES') || uploadMessage.text.includes('permission denied')) && (
+                    <div className="mt-1 p-2.5 rounded bg-slate-950 border border-rose-900/60 text-slate-300 font-sans text-[11px] space-y-1">
+                      <p className="font-semibold text-rose-300">Solusi Izin VM (Jalankan di Terminal VM Ubuntu):</p>
+                      <code className="block bg-slate-900 p-1.5 rounded font-mono text-emerald-400 select-all border border-slate-800">
+                        sudo chown -R $USER:$USER /srv/app-data/screenshots &amp;&amp; sudo chmod -R 775 /srv/app-data/screenshots
+                      </code>
+                    </div>
                   )}
-                  <span>{uploadMessage.text}</span>
                 </div>
               )}
 

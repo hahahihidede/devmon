@@ -10,6 +10,7 @@ import {
   getSafeFilePath,
   validateImageBuffer,
   getStorageStats,
+  FALLBACK_DIR,
 } from '../storage.js';
 
 const router = Router();
@@ -180,7 +181,7 @@ router.get('/:id/image', requireAuth, async (req: AuthenticatedRequest, res: Res
   }
 });
 
-// Helper to safely sanitize and save image file to disk
+// Helper to safely sanitize and save image file to disk with EACCES auto-fallback
 function saveImageToDisk(file: Express.Multer.File, preserveOriginalName: boolean = true): {
   filename: string;
   targetPath: string;
@@ -203,14 +204,32 @@ function saveImageToDisk(file: Express.Multer.File, preserveOriginalName: boolea
     filename = generateUniqueFilename(cleanName, validation.mimeType);
   }
 
-  const targetDir = getStorageDir();
-  // Ensure target directory exists
-  if (!fs.existsSync(targetDir)) {
-    fs.mkdirSync(targetDir, { recursive: true, mode: 0o750 });
-  }
+  let targetDir = getStorageDir();
+  let targetPath = path.join(targetDir, filename);
 
-  const targetPath = path.join(targetDir, filename);
-  fs.writeFileSync(targetPath, file.buffer);
+  try {
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true, mode: 0o775 });
+    }
+    fs.writeFileSync(targetPath, file.buffer);
+  } catch (err: any) {
+    console.warn(`[Storage Write Warning] Gagal menyimpan ke ${targetDir} (${err.message}). Mencoba folder fallback: ${FALLBACK_DIR}`);
+    
+    // Fallback if targetDir has EACCES permission denied
+    targetDir = FALLBACK_DIR;
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true, mode: 0o775 });
+    }
+    targetPath = path.join(targetDir, filename);
+    try {
+      fs.writeFileSync(targetPath, file.buffer);
+    } catch (fallbackErr: any) {
+      console.error(`[Storage Write Error] Gagal menulis ke fallback ${targetDir}:`, fallbackErr);
+      throw new Error(
+        `Izin akses ditolak (Permission Denied) pada folder server. Jalankan perintah 'sudo chown -R $USER:$USER /srv/app-data/screenshots && sudo chmod -R 775 /srv/app-data/screenshots' di terminal VM Anda.`
+      );
+    }
+  }
 
   return {
     filename,
