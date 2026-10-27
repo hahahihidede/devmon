@@ -30,6 +30,7 @@ import {
   uploadScreenshotsBatch,
   deleteScreenshot,
   deleteScreenshotsBatch,
+  syncScreenshotsDisk,
   ScreenshotsResponse,
 } from '../services/api.js';
 import { ScreenshotItem } from '../types.js';
@@ -70,7 +71,27 @@ export const ScreenshotsView: React.FC = () => {
   const [itemToDelete, setItemToDelete] = useState<ScreenshotItem | null>(null);
   const [showBatchDeleteModal, setShowBatchDeleteModal] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [syncLoading, setSyncLoading] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const handleSyncDisk = async () => {
+    setSyncLoading(true);
+    try {
+      const res = await syncScreenshotsDisk();
+      setToast({
+        type: 'success',
+        message: res.message || `Sinkronisasi berhasil! ${res.syncedCount || 0} berkas disk terindeks.`,
+      });
+      await loadData();
+    } catch (err: any) {
+      setToast({
+        type: 'error',
+        message: err.message || 'Gagal menyinkronkan berkas dari direktori disk VM.',
+      });
+    } finally {
+      setSyncLoading(false);
+    }
+  };
 
   // Auto-dismiss toast
   useEffect(() => {
@@ -196,11 +217,13 @@ export const ScreenshotsView: React.FC = () => {
       });
       setUploadFiles([]);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      // Immediately reload data in the background
+      loadData();
       setTimeout(() => {
         setShowUploadModal(false);
         setUploadMessage(null);
         loadData();
-      }, 1500);
+      }, 1200);
     } catch (err: any) {
       setUploadMessage({ text: err.message || 'Gagal mengunggah screenshot.', isError: true });
     } finally {
@@ -254,6 +277,17 @@ export const ScreenshotsView: React.FC = () => {
                 <TableIcon className="w-4 h-4" />
               </button>
             </div>
+
+            {/* Sync Disk Button */}
+            <button
+              onClick={handleSyncDisk}
+              disabled={syncLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-medium text-xs transition-colors shadow-xs cursor-pointer disabled:opacity-50"
+              title="Pindai dan sinkronkan semua berkas di /srv/app-data/screenshots/ ke database"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${syncLoading ? 'animate-spin' : ''}`} />
+              <span>{syncLoading ? 'Sinkronisasi...' : 'Sinkronkan Disk VM'}</span>
+            </button>
 
             {/* Test Upload Button */}
             <button
@@ -450,15 +484,25 @@ export const ScreenshotsView: React.FC = () => {
             <ImageIcon className="w-12 h-12 text-slate-600 mx-auto mb-3" />
             <h3 className="text-base font-semibold text-slate-200">Belum Ada Screenshot Tersimpan</h3>
             <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-              Screenshot akan muncul di sini saat agen perekam perangkat mengunggah gambar ke endpoint backend atau Anda dapat menguji dengan tombol di bawah.
+              Screenshot akan muncul di sini saat agen perekam perangkat mengunggah gambar ke endpoint backend atau Anda dapat menyinkronkan berkas yang sudah ada di disk VM.
             </p>
-            <button
-              onClick={() => setShowUploadModal(true)}
-              className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
-            >
-              <Upload className="w-3.5 h-3.5" />
-              <span>Uji Unggah Screenshot Pertama</span>
-            </button>
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              <button
+                onClick={handleSyncDisk}
+                disabled={syncLoading}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${syncLoading ? 'animate-spin' : ''}`} />
+                <span>{syncLoading ? 'Menyinkronkan Berkas...' : 'Sinkronkan Berkas Disk VM'}</span>
+              </button>
+              <button
+                onClick={() => setShowUploadModal(true)}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Uji Unggah Screenshot</span>
+              </button>
+            </div>
           </div>
         ) : viewMode === 'gallery' ? (
           /* Gallery Grid */

@@ -212,6 +212,18 @@ export async function deleteScreenshotsBatch(ids: string[]): Promise<{
   });
 }
 
+export async function syncScreenshotsDisk(): Promise<{
+  success: boolean;
+  message: string;
+  syncedCount: number;
+  totalDiskFiles: number;
+  storagePath: string;
+}> {
+  return apiRequest('/api/screenshots/sync', {
+    method: 'POST',
+  });
+}
+
 // System & Schema API
 export async function getSystemStatus(): Promise<SystemStatus> {
   return apiRequest<SystemStatus>('/api/system/status');

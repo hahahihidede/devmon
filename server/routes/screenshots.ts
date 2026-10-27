@@ -9,6 +9,7 @@ import {
   saveScreenshotMetadata,
   deleteScreenshotRecord,
   deleteScreenshotsBatchRecords,
+  syncDiskScreenshotsWithDb,
 } from '../db.js';
 import {
   getStorageDir,
@@ -67,6 +68,27 @@ router.get('/', requireAuth, async (req: AuthenticatedRequest, res: Response) =>
     res.status(500).json({
       success: false,
       error: err.message || 'Gagal memuat metadata screenshot.',
+    });
+  }
+});
+
+// POST /api/screenshots/sync
+// Manually trigger synchronization of physical files on VM disk into metadata table
+router.post('/sync', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const result = await syncDiskScreenshotsWithDb(true);
+    res.json({
+      success: true,
+      message: result.message,
+      syncedCount: result.syncedCount,
+      totalDiskFiles: result.totalDiskFiles,
+      storagePath: getStorageDir(),
+    });
+  } catch (err: any) {
+    console.error('[Sync Route Error]', err);
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Gagal menyinkronkan screenshot dari disk VM.',
     });
   }
 });
@@ -295,10 +317,18 @@ router.post(
             notes,
           });
           savedItems.push({ ...saved, metadata: meta });
-        } catch {
+        } catch (saveErr) {
+          console.warn('[Save Screenshot Metadata Warning]', saveErr);
           // File is saved to filesystem even if metadata insertion fails
           savedItems.push(saved);
         }
+      }
+
+      // Ensure all disk files are synchronized
+      try {
+        await syncDiskScreenshotsWithDb(true);
+      } catch (syncErr: any) {
+        console.warn('[Post-Upload Sync Warning]', syncErr.message);
       }
 
       res.status(201).json({

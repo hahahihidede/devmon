@@ -1,5 +1,8 @@
 import pg from 'pg';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import { listDiskScreenshotFiles, getSafeFilePath } from './storage.js';
 
 const { Pool } = pg;
 
@@ -642,22 +645,140 @@ export interface GetScreenshotsParams {
   deviceId?: string;
 }
 
+let lastDiskSyncTime = 0;
+const DISK_SYNC_COOLDOWN_MS = 2500;
+
+// Synchronize physical files on VM disk into the screenshot_metadata table / mock store
+export async function syncDiskScreenshotsWithDb(force: boolean = false): Promise<{
+  syncedCount: number;
+  totalDiskFiles: number;
+  message: string;
+}> {
+  const now = Date.now();
+  if (!force && now - lastDiskSyncTime < DISK_SYNC_COOLDOWN_MS) {
+    return { syncedCount: 0, totalDiskFiles: 0, message: 'Sync throttled' };
+  }
+  lastDiskSyncTime = now;
+
+  const diskFiles = listDiskScreenshotFiles();
+  let syncedCount = 0;
+
+  if (!pool || !isConnected) {
+    // Synchronize with local mock store
+    for (const df of diskFiles) {
+      const exists = mockScreenshots.some(s => s.filename === df.filename);
+      if (!exists) {
+        mockScreenshots.unshift({
+          id: `scr-${crypto.createHash('md5').update(df.filename).digest('hex').slice(0, 12)}`,
+          filename: df.filename,
+          original_filename: df.filename,
+          timestamp: df.mtime.toISOString(),
+          file_size: df.size,
+          mime_type: df.mimeType,
+          storage_status: 'AVAILABLE',
+          device_id: 'DEVICE-01',
+          notes: 'Berkas fisik terdeteksi di direktori VM',
+        });
+        syncedCount++;
+      }
+    }
+    return {
+      syncedCount,
+      totalDiskFiles: diskFiles.length,
+      message: `${syncedCount} berkas baru disinkronkan ke memori lokal.`,
+    };
+  }
+
+  // PostgreSQL is connected: ensure table exists and sync
+  await ensureScreenshotMetadataTable();
+  const client = await pool.connect();
+  try {
+    // 1. Sync every physical file on disk into screenshot_metadata
+    for (const df of diskFiles) {
+      const id = `scr-${crypto.createHash('md5').update(df.filename).digest('hex').slice(0, 12)}`;
+      const res = await client.query(
+        `INSERT INTO screenshot_metadata (id, filename, original_filename, timestamp, file_size, mime_type, storage_status, device_id, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, 'AVAILABLE', 'DEVICE-01', 'Tersimpan di disk VM')
+         ON CONFLICT (filename) DO UPDATE 
+         SET file_size = EXCLUDED.file_size,
+             storage_status = 'AVAILABLE';`,
+        [id, df.filename, df.filename, df.mtime.toISOString(), df.size, df.mimeType]
+      );
+      if (res.rowCount && res.rowCount > 0) {
+        syncedCount++;
+      }
+    }
+
+    // 2. Also import any screenshot entries from events table if present
+    try {
+      const checkEventsRes = await client.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.columns 
+          WHERE table_schema = 'public' AND table_name = 'events' AND column_name = 'screenshot_path'
+        );
+      `);
+      if (checkEventsRes.rows[0]?.exists) {
+        await client.query(`
+          INSERT INTO screenshot_metadata (id, filename, original_filename, timestamp, file_size, mime_type, storage_status, device_id, notes)
+          SELECT 
+            'evt-' || id,
+            regexp_replace(screenshot_path, '^.*[\\\\/]', '') as filename,
+            regexp_replace(screenshot_path, '^.*[\\\\/]', '') as original_filename,
+            timestamp,
+            245800,
+            CASE WHEN LOWER(screenshot_path) LIKE '%.png' THEN 'image/png' ELSE 'image/jpeg' END,
+            'AVAILABLE',
+            'DEVICE-01',
+            '[' || UPPER(COALESCE(event_type, 'EVENT')) || '] ' || COALESCE(details, '')
+          FROM events
+          WHERE screenshot_path IS NOT NULL AND screenshot_path != ''
+          ON CONFLICT (filename) DO NOTHING;
+        `);
+      }
+    } catch (e: any) {
+      console.warn('[Sync Events Screenshots Warning]', e.message);
+    }
+
+    return {
+      syncedCount,
+      totalDiskFiles: diskFiles.length,
+      message: `${syncedCount} berkas screenshot berhasil disinkronkan ke database PostgreSQL.`,
+    };
+  } catch (err: any) {
+    console.error('[Sync Disk Screenshots Error]', err);
+    return {
+      syncedCount: 0,
+      totalDiskFiles: diskFiles.length,
+      message: `Gagal sinkronisasi: ${err.message}`,
+    };
+  } finally {
+    client.release();
+  }
+}
+
 export async function getScreenshotRecords(params: GetScreenshotsParams) {
   const page = Math.max(1, params.page || 1);
   const limit = Math.min(100, Math.max(1, params.limit || 12));
   const offset = (page - 1) * limit;
 
+  // Auto-sync files currently on disk before reading
+  try {
+    await syncDiskScreenshotsWithDb();
+  } catch (err: any) {
+    console.warn('[Auto-sync Notice]', err.message);
+  }
+
   if (!pool || !isConnected) {
     let filtered = [...mockScreenshots];
-    if (params.startDate) {
+    if (params.startDate && params.startDate.trim()) {
       const startMs = new Date(params.startDate).getTime();
       filtered = filtered.filter(item => new Date(item.timestamp).getTime() >= startMs);
     }
-    if (params.endDate) {
+    if (params.endDate && params.endDate.trim()) {
       const endMs = new Date(params.endDate).getTime() + (params.endDate.length <= 10 ? 24 * 60 * 60 * 1000 - 1 : 0);
       filtered = filtered.filter(item => new Date(item.timestamp).getTime() <= endMs);
     }
-    if (params.deviceId) {
+    if (params.deviceId && params.deviceId.trim()) {
       filtered = filtered.filter(item => item.device_id.toLowerCase().includes(params.deviceId!.toLowerCase()));
     }
 
@@ -676,87 +797,21 @@ export async function getScreenshotRecords(params: GetScreenshotsParams) {
     };
   }
 
+  // Live PostgreSQL: ensure table exists and query screenshot_metadata
+  await ensureScreenshotMetadataTable();
   const client = await pool.connect();
   try {
-    // Check if events table exists and contains screenshot_path records
-    const checkEventsRes = await client.query(`
-      SELECT EXISTS (
-        SELECT FROM information_schema.columns 
-        WHERE table_schema = 'public' AND table_name = 'events' AND column_name = 'screenshot_path'
-      );
-    `);
-
-    const hasEventsScreenshots = Boolean(checkEventsRes.rows[0]?.exists);
-
-    if (hasEventsScreenshots) {
-      const whereClauses: string[] = ["screenshot_path IS NOT NULL", "screenshot_path != ''"];
-      const queryParams: any[] = [];
-      let pIdx = 1;
-
-      if (params.startDate) {
-        whereClauses.push(`timestamp >= $${pIdx}`);
-        queryParams.push(new Date(params.startDate).toISOString());
-        pIdx++;
-      }
-
-      if (params.endDate) {
-        const endParsed = new Date(params.endDate);
-        if (params.endDate.length <= 10) endParsed.setUTCHours(23, 59, 59, 999);
-        whereClauses.push(`timestamp <= $${pIdx}`);
-        queryParams.push(endParsed.toISOString());
-        pIdx++;
-      }
-
-      const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
-      const countRes = await client.query(`SELECT COUNT(*) as total FROM events ${whereSql};`, queryParams);
-      const total = parseInt(countRes.rows[0]?.total || '0', 10);
-
-      const querySql = `
-        SELECT id, timestamp, event_type, details, screenshot_path
-        FROM events
-        ${whereSql}
-        ORDER BY timestamp DESC
-        LIMIT $${pIdx} OFFSET $${pIdx + 1};
-      `;
-
-      const dataRes = await client.query(querySql, [...queryParams, limit, offset]);
-
-      return {
-        records: dataRes.rows.map((row: any) => {
-          const rawPath = String(row.screenshot_path || '');
-          const cleanFilename = rawPath.replace(/\\/g, '/').split('/').pop() || 'screenshot.png';
-          return {
-            id: `evt-${row.id}`,
-            filename: cleanFilename,
-            original_filename: cleanFilename,
-            timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : new Date().toISOString(),
-            file_size: 245800,
-            mime_type: cleanFilename.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg',
-            storage_status: 'AVAILABLE',
-            device_id: 'DEVICE-01',
-            notes: `[${(row.event_type || 'activity').toUpperCase()}] ${row.details || ''}`,
-          };
-        }),
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-        source: 'postgresql (events)',
-      };
-    }
-
-    // Fallback: Query screenshot_metadata table
     const whereClauses: string[] = [];
     const queryParams: any[] = [];
     let pIdx = 1;
 
-    if (params.startDate) {
+    if (params.startDate && params.startDate.trim()) {
       whereClauses.push(`timestamp >= $${pIdx}`);
       queryParams.push(new Date(params.startDate).toISOString());
       pIdx++;
     }
 
-    if (params.endDate) {
+    if (params.endDate && params.endDate.trim()) {
       const endParsed = new Date(params.endDate);
       if (params.endDate.length <= 10) endParsed.setUTCHours(23, 59, 59, 999);
       whereClauses.push(`timestamp <= $${pIdx}`);
@@ -764,7 +819,7 @@ export async function getScreenshotRecords(params: GetScreenshotsParams) {
       pIdx++;
     }
 
-    if (params.deviceId) {
+    if (params.deviceId && params.deviceId.trim()) {
       whereClauses.push(`device_id ILIKE $${pIdx}`);
       queryParams.push(`%${params.deviceId}%`);
       pIdx++;
@@ -808,64 +863,107 @@ export async function getScreenshotRecords(params: GetScreenshotsParams) {
   }
 }
 
-// Find screenshot by ID
+// Find screenshot by ID or filename with disk fallback
 export async function getScreenshotById(id: string): Promise<ScreenshotMetadata | null> {
   if (!pool || !isConnected) {
-    return mockScreenshots.find(s => s.id === id) || null;
+    const item = mockScreenshots.find(s => s.id === id || s.filename === id);
+    if (item) return item;
+
+    // Check disk
+    const safePath = getSafeFilePath(id);
+    if (safePath && fs.existsSync(safePath)) {
+      const stats = fs.statSync(safePath);
+      const filename = path.basename(safePath);
+      return {
+        id: `scr-${crypto.createHash('md5').update(filename).digest('hex').slice(0, 12)}`,
+        filename,
+        original_filename: filename,
+        timestamp: stats.mtime.toISOString(),
+        file_size: stats.size,
+        mime_type: filename.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg',
+        storage_status: 'AVAILABLE',
+        device_id: 'DEVICE-01',
+        notes: 'File terdeteksi pada disk VM',
+      };
+    }
+    return null;
   }
 
   const client = await pool.connect();
   try {
-    // If ID is from events table (e.g. evt-55)
+    // 1. Check screenshot_metadata table
+    const res = await client.query(
+      `SELECT id, filename, original_filename, timestamp, file_size, mime_type, storage_status, device_id, notes
+       FROM screenshot_metadata WHERE id = $1 OR filename = $1 LIMIT 1;`,
+      [id]
+    );
+    if (res.rows.length > 0) {
+      const row = res.rows[0];
+      return {
+        id: row.id,
+        filename: row.filename,
+        original_filename: row.original_filename,
+        timestamp: new Date(row.timestamp).toISOString(),
+        file_size: parseInt(row.file_size, 10),
+        mime_type: row.mime_type,
+        storage_status: row.storage_status,
+        device_id: row.device_id,
+        notes: row.notes,
+      };
+    }
+
+    // 2. If ID is from events table (e.g. evt-55)
     if (id.startsWith('evt-')) {
       const rawId = parseInt(id.replace('evt-', ''), 10);
-      const res = await client.query(
+      const evtRes = await client.query(
         `SELECT id, timestamp, event_type, details, screenshot_path 
          FROM events WHERE id = $1 LIMIT 1;`,
         [rawId]
       );
-      if (res.rows.length === 0) return null;
-      const row = res.rows[0];
-      const rawPath = String(row.screenshot_path || '');
-      const cleanFilename = rawPath.replace(/\\/g, '/').split('/').pop() || 'screenshot.png';
+      if (evtRes.rows.length > 0) {
+        const row = evtRes.rows[0];
+        const rawPath = String(row.screenshot_path || '');
+        const cleanFilename = rawPath.replace(/\\/g, '/').split('/').pop() || 'screenshot.png';
 
+        return {
+          id: `evt-${row.id}`,
+          filename: cleanFilename,
+          original_filename: cleanFilename,
+          timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : new Date().toISOString(),
+          file_size: 245800,
+          mime_type: cleanFilename.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg',
+          storage_status: 'AVAILABLE',
+          device_id: 'DEVICE-01',
+          notes: `[${(row.event_type || 'activity').toUpperCase()}] ${row.details || ''}`,
+        };
+      }
+    }
+
+    // 3. Disk fallback
+    const safePath = getSafeFilePath(id);
+    if (safePath && fs.existsSync(safePath)) {
+      const stats = fs.statSync(safePath);
+      const filename = path.basename(safePath);
       return {
-        id: `evt-${row.id}`,
-        filename: cleanFilename,
-        original_filename: cleanFilename,
-        timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : new Date().toISOString(),
-        file_size: 245800,
-        mime_type: cleanFilename.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg',
+        id: `scr-${crypto.createHash('md5').update(filename).digest('hex').slice(0, 12)}`,
+        filename,
+        original_filename: filename,
+        timestamp: stats.mtime.toISOString(),
+        file_size: stats.size,
+        mime_type: filename.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg',
         storage_status: 'AVAILABLE',
         device_id: 'DEVICE-01',
-        notes: `[${(row.event_type || 'activity').toUpperCase()}] ${row.details || ''}`,
+        notes: 'File terdeteksi pada disk VM',
       };
     }
 
-    const res = await client.query(
-      `SELECT id, filename, original_filename, timestamp, file_size, mime_type, storage_status, device_id, notes
-       FROM screenshot_metadata WHERE id = $1 LIMIT 1;`,
-      [id]
-    );
-    if (res.rows.length === 0) return null;
-    const row = res.rows[0];
-    return {
-      id: row.id,
-      filename: row.filename,
-      original_filename: row.original_filename,
-      timestamp: new Date(row.timestamp).toISOString(),
-      file_size: parseInt(row.file_size, 10),
-      mime_type: row.mime_type,
-      storage_status: row.storage_status,
-      device_id: row.device_id,
-      notes: row.notes,
-    };
+    return null;
   } finally {
     client.release();
   }
 }
 
-// Insert screenshot metadata into database
+// Insert screenshot metadata into database with conflict handling
 export async function saveScreenshotMetadata(data: {
   id?: string;
   filename: string;
@@ -891,11 +989,17 @@ export async function saveScreenshotMetadata(data: {
 
   // If live DB connected, persist to PostgreSQL
   if (pool && isConnected) {
+    await ensureScreenshotMetadataTable();
     const client = await pool.connect();
     try {
       await client.query(
         `INSERT INTO screenshot_metadata (id, filename, original_filename, timestamp, file_size, mime_type, storage_status, device_id, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (filename) DO UPDATE 
+         SET timestamp = EXCLUDED.timestamp,
+             file_size = EXCLUDED.file_size,
+             storage_status = EXCLUDED.storage_status,
+             notes = EXCLUDED.notes;`,
         [
           metadata.id,
           metadata.filename,
@@ -913,7 +1017,12 @@ export async function saveScreenshotMetadata(data: {
     }
   } else {
     // Keep in mock store
-    mockScreenshots.unshift(metadata);
+    const existingIdx = mockScreenshots.findIndex(s => s.filename === metadata.filename);
+    if (existingIdx !== -1) {
+      mockScreenshots[existingIdx] = metadata;
+    } else {
+      mockScreenshots.unshift(metadata);
+    }
   }
 
   return metadata;

@@ -233,3 +233,60 @@ export function deleteScreenshotFile(filename: string): {
     };
   }
 }
+
+// List all physical image files in active storage dir and fallback dir
+export function listDiskScreenshotFiles(): Array<{
+  filename: string;
+  fullPath: string;
+  size: number;
+  mtime: Date;
+  mimeType: string;
+}> {
+  const dirs = [getStorageDir()];
+  if (FALLBACK_DIR !== getStorageDir() && fs.existsSync(FALLBACK_DIR)) {
+    dirs.push(FALLBACK_DIR);
+  }
+
+  const seen = new Set<string>();
+  const results: Array<{
+    filename: string;
+    fullPath: string;
+    size: number;
+    mtime: Date;
+    mimeType: string;
+  }> = [];
+
+  for (const dir of dirs) {
+    try {
+      if (!fs.existsSync(dir)) continue;
+      const files = fs.readdirSync(dir);
+      for (const file of files) {
+        if (file.startsWith('.')) continue;
+        const ext = path.extname(file).toLowerCase();
+        if (!['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) continue;
+        if (seen.has(file)) continue;
+
+        try {
+          const fullPath = path.join(dir, file);
+          const stats = fs.statSync(fullPath);
+          if (stats.isFile()) {
+            seen.add(file);
+            results.push({
+              filename: file,
+              fullPath,
+              size: stats.size,
+              mtime: stats.mtime,
+              mimeType: ext === '.png' ? 'image/png' : 'image/jpeg',
+            });
+          }
+        } catch {
+          // ignore unreadable file
+        }
+      }
+    } catch (err) {
+      console.warn(`[Storage] Gagal membaca direktori ${dir}:`, err);
+    }
+  }
+
+  return results;
+}
