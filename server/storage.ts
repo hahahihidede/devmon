@@ -185,3 +185,51 @@ export function getStorageStats() {
     };
   }
 }
+
+// Safely delete a screenshot file from the VM disk
+export function deleteScreenshotFile(filename: string): {
+  success: boolean;
+  deleted: boolean;
+  filePath?: string;
+  error?: string;
+} {
+  try {
+    if (!filename) {
+      return { success: false, deleted: false, error: 'Nama file tidak boleh kosong.' };
+    }
+
+    const safePath = getSafeFilePath(filename);
+    if (!safePath) {
+      return { success: false, deleted: false, error: 'Nama file tidak valid atau berpotensi path traversal.' };
+    }
+
+    // Verify file actually exists before unlinking
+    if (fs.existsSync(safePath)) {
+      fs.unlinkSync(safePath);
+      console.log(`[Storage] Berhasil menghapus file screenshot fisik: ${safePath}`);
+      return { success: true, deleted: true, filePath: safePath };
+    }
+
+    // Also check fallback location if different
+    const fallbackPath = path.resolve(FALLBACK_DIR, path.basename(filename));
+    if (fallbackPath !== safePath && fs.existsSync(fallbackPath)) {
+      fs.unlinkSync(fallbackPath);
+      console.log(`[Storage] Berhasil menghapus file fallback: ${fallbackPath}`);
+      return { success: true, deleted: true, filePath: fallbackPath };
+    }
+
+    return {
+      success: true,
+      deleted: false,
+      filePath: safePath,
+      error: 'File fisik tidak ditemukan pada disk (mungkin sudah dihapus sebelumnya).',
+    };
+  } catch (err: any) {
+    console.error(`[Storage] Gagal menghapus file ${filename}:`, err);
+    return {
+      success: false,
+      deleted: false,
+      error: `Gagal menghapus file dari disk: ${err.message}`,
+    };
+  }
+}

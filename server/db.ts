@@ -919,6 +919,119 @@ export async function saveScreenshotMetadata(data: {
   return metadata;
 }
 
+// Delete screenshot record from database or mock store
+export async function deleteScreenshotRecord(id: string): Promise<{
+  success: boolean;
+  deletedItem: ScreenshotMetadata | null;
+  message?: string;
+}> {
+  // If in mock/fallback mode
+  if (!pool || !isConnected) {
+    const idx = mockScreenshots.findIndex(s => s.id === id);
+    if (idx !== -1) {
+      const [deleted] = mockScreenshots.splice(idx, 1);
+      return { success: true, deletedItem: deleted };
+    }
+    return { success: false, deletedItem: null, message: 'Screenshot tidak ditemukan di mock store.' };
+  }
+
+  const client = await pool.connect();
+  try {
+    // If ID is from events table (e.g. evt-55)
+    if (id.startsWith('evt-')) {
+      const rawId = parseInt(id.replace('evt-', ''), 10);
+      const selRes = await client.query(
+        `SELECT id, timestamp, event_type, details, screenshot_path 
+         FROM events WHERE id = $1 LIMIT 1;`,
+        [rawId]
+      );
+
+      if (selRes.rows.length === 0) {
+        return { success: false, deletedItem: null, message: 'Record event tidak ditemukan.' };
+      }
+
+      const row = selRes.rows[0];
+      const rawPath = String(row.screenshot_path || '');
+      const cleanFilename = rawPath.replace(/\\/g, '/').split('/').pop() || 'screenshot.png';
+
+      const deletedItem: ScreenshotMetadata = {
+        id: `evt-${row.id}`,
+        filename: cleanFilename,
+        original_filename: cleanFilename,
+        timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : new Date().toISOString(),
+        file_size: 245800,
+        mime_type: cleanFilename.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg',
+        storage_status: 'DELETED',
+        device_id: 'DEVICE-01',
+        notes: row.details || '',
+      };
+
+      // Clear screenshot_path from event record (or delete event if event_type is screenshot)
+      if (row.event_type && String(row.event_type).toLowerCase() === 'screenshot') {
+        await client.query(`DELETE FROM events WHERE id = $1;`, [rawId]);
+      } else {
+        await client.query(`UPDATE events SET screenshot_path = NULL WHERE id = $1;`, [rawId]);
+      }
+
+      return { success: true, deletedItem };
+    }
+
+    // Normal record in screenshot_metadata table
+    const selRes = await client.query(
+      `SELECT id, filename, original_filename, timestamp, file_size, mime_type, storage_status, device_id, notes
+       FROM screenshot_metadata WHERE id = $1 LIMIT 1;`,
+      [id]
+    );
+
+    if (selRes.rows.length === 0) {
+      return { success: false, deletedItem: null, message: 'Screenshot metadata tidak ditemukan di database.' };
+    }
+
+    const row = selRes.rows[0];
+    const deletedItem: ScreenshotMetadata = {
+      id: row.id,
+      filename: row.filename,
+      original_filename: row.original_filename,
+      timestamp: new Date(row.timestamp).toISOString(),
+      file_size: parseInt(row.file_size, 10),
+      mime_type: row.mime_type,
+      storage_status: 'DELETED',
+      device_id: row.device_id,
+      notes: row.notes,
+    };
+
+    await client.query(`DELETE FROM screenshot_metadata WHERE id = $1;`, [id]);
+
+    return { success: true, deletedItem };
+  } finally {
+    client.release();
+  }
+}
+
+// Delete batch of screenshots from database or mock store
+export async function deleteScreenshotsBatchRecords(ids: string[]): Promise<{
+  deletedItems: ScreenshotMetadata[];
+  failedIds: string[];
+}> {
+  const deletedItems: ScreenshotMetadata[] = [];
+  const failedIds: string[] = [];
+
+  for (const id of ids) {
+    try {
+      const res = await deleteScreenshotRecord(id);
+      if (res.success && res.deletedItem) {
+        deletedItems.push(res.deletedItem);
+      } else {
+        failedIds.push(id);
+      }
+    } catch {
+      failedIds.push(id);
+    }
+  }
+
+  return { deletedItems, failedIds };
+}
+
 // Status check helper
 export function getDbConnectionStatus() {
   return {

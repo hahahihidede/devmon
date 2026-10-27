@@ -186,6 +186,32 @@ export async function uploadScreenshotsBatch(files: File[], deviceId: string = '
   });
 }
 
+export async function deleteScreenshot(id: string): Promise<{
+  success: boolean;
+  message: string;
+  id: string;
+  filename: string;
+  physicalFileDeleted: boolean;
+  dbRecordDeleted: boolean;
+}> {
+  return apiRequest(`/api/screenshots/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function deleteScreenshotsBatch(ids: string[]): Promise<{
+  success: boolean;
+  message: string;
+  deletedCount: number;
+  deletedIds: string[];
+  deletedFilesCount: number;
+}> {
+  return apiRequest('/api/screenshots/batch-delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  });
+}
+
 // System & Schema API
 export async function getSystemStatus(): Promise<SystemStatus> {
   return apiRequest<SystemStatus>('/api/system/status');

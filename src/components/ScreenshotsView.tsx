@@ -18,8 +18,20 @@ import {
   CheckCircle2,
   AlertCircle,
   FileText,
+  Trash2,
+  CheckSquare,
+  Square,
+  AlertTriangle,
 } from 'lucide-react';
-import { fetchScreenshots, getScreenshotImageUrl, uploadScreenshot, uploadScreenshotsBatch, ScreenshotsResponse } from '../services/api.js';
+import {
+  fetchScreenshots,
+  getScreenshotImageUrl,
+  uploadScreenshot,
+  uploadScreenshotsBatch,
+  deleteScreenshot,
+  deleteScreenshotsBatch,
+  ScreenshotsResponse,
+} from '../services/api.js';
 import { ScreenshotItem } from '../types.js';
 import { formatToWIB, formatDateOnlyWIB, formatTimeOnlyWIB, formatRelativeTime, formatBytes } from '../utils/date.js';
 
@@ -50,6 +62,92 @@ export const ScreenshotsView: React.FC = () => {
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<{ text: string; isError?: boolean } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Multi-select state
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  // Deletion modal states
+  const [itemToDelete, setItemToDelete] = useState<ScreenshotItem | null>(null);
+  const [showBatchDeleteModal, setShowBatchDeleteModal] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Auto-dismiss toast
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => {
+        setToast(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
+  const toggleSelectItem = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    if (!data?.records) return;
+    if (selectedIds.length === data.records.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(data.records.map((r) => r.id));
+    }
+  };
+
+  const confirmSingleDelete = async () => {
+    if (!itemToDelete) return;
+    setDeleteLoading(true);
+    try {
+      const res = await deleteScreenshot(itemToDelete.id);
+      setToast({
+        type: 'success',
+        message: `Berhasil! File "${itemToDelete.original_filename || itemToDelete.filename}" telah dihapus dari disk VM & database.`,
+      });
+      if (selectedItem?.id === itemToDelete.id) {
+        setSelectedItem(null);
+      }
+      setSelectedIds((prev) => prev.filter((id) => id !== itemToDelete.id));
+      setItemToDelete(null);
+      await loadData();
+    } catch (err: any) {
+      setToast({
+        type: 'error',
+        message: err.message || 'Gagal menghapus file screenshot dari server.',
+      });
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  const confirmBatchDelete = async () => {
+    if (selectedIds.length === 0) return;
+    setDeleteLoading(true);
+    try {
+      const res = await deleteScreenshotsBatch(selectedIds);
+      setToast({
+        type: 'success',
+        message: `Berhasil! ${res.message || `${selectedIds.length} file screenshot telah dibersihkan.`}`,
+      });
+      if (selectedItem && selectedIds.includes(selectedItem.id)) {
+        setSelectedItem(null);
+      }
+      setSelectedIds([]);
+      setShowBatchDeleteModal(false);
+      await loadData();
+    } catch (err: any) {
+      setToast({
+        type: 'error',
+        message: err.message || 'Gagal menghapus screenshot terpilih.',
+      });
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -273,6 +371,60 @@ export const ScreenshotsView: React.FC = () => {
         </div>
       </div>
 
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          className={`mx-4 mt-3 p-3 rounded-lg text-xs flex items-center justify-between border shadow-sm transition-all animate-fade-in ${
+            toast.type === 'success'
+              ? 'bg-emerald-950/70 border-emerald-800 text-emerald-200'
+              : 'bg-rose-950/70 border-rose-800 text-rose-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {toast.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            )}
+            <span>{toast.message}</span>
+          </div>
+          <button
+            onClick={() => setToast(null)}
+            className="p-1 hover:text-white rounded hover:bg-black/20 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Batch Selection Action Bar */}
+      {selectedIds.length > 0 && (
+        <div className="mx-4 mt-3 p-2.5 bg-sky-950/80 border border-sky-800/80 rounded-xl flex items-center justify-between gap-3 text-xs shadow-md">
+          <div className="flex items-center gap-2.5">
+            <span className="font-semibold text-sky-200 flex items-center gap-1.5">
+              <CheckSquare className="w-4 h-4 text-sky-400" />
+              <span>{selectedIds.length} screenshot terpilih</span>
+            </span>
+            <button
+              onClick={() => setSelectedIds([])}
+              className="text-slate-400 hover:text-white underline text-[11px] cursor-pointer"
+            >
+              Batalkan Pilihan
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowBatchDeleteModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-medium transition-colors shadow-xs cursor-pointer text-xs"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Hapus ({selectedIds.length}) File Terpilih</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Error Banner */}
       {error && (
         <div className="m-4 p-3 bg-rose-950/70 border border-rose-800 rounded-lg text-rose-200 text-xs flex items-center justify-between">
@@ -311,70 +463,120 @@ export const ScreenshotsView: React.FC = () => {
         ) : viewMode === 'gallery' ? (
           /* Gallery Grid */
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-            {data.records.map((item) => (
-              <div
-                key={item.id}
-                onClick={() => setSelectedItem(item)}
-                className="group bg-slate-900 border border-slate-800/90 hover:border-sky-500/50 rounded-xl overflow-hidden transition-all duration-200 shadow-sm hover:shadow-lg hover:shadow-sky-500/5 flex flex-col cursor-pointer"
-              >
-                {/* Thumbnail Image Box */}
-                <div className="relative aspect-video bg-slate-950 overflow-hidden flex items-center justify-center border-b border-slate-800/80">
-                  <img
-                    src={getScreenshotImageUrl(item.id)}
-                    alt={item.original_filename}
-                    loading="lazy"
-                    className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
-                    onError={(e) => {
-                      // Fallback visual if preview fails
-                      (e.target as HTMLElement).style.display = 'none';
-                    }}
-                  />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <span className="p-2 bg-slate-900/90 text-white rounded-full border border-slate-700 shadow-md">
-                      <Maximize2 className="w-4 h-4" />
-                    </span>
-                  </div>
-
-                  {/* Device Tag Badge */}
-                  <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-slate-950/80 backdrop-blur-xs border border-slate-700/80 text-[10px] font-mono text-slate-200">
-                    {item.device_id}
-                  </div>
-
-                  {/* File Size */}
-                  <div className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-slate-950/80 backdrop-blur-xs text-[10px] font-mono text-slate-300">
-                    {formatBytes(item.file_size)}
-                  </div>
-                </div>
-
-                {/* Card Content */}
-                <div className="p-3 flex-1 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="font-medium text-slate-200 truncate pr-2" title={item.original_filename}>
-                        {item.original_filename}
-                      </span>
-                      <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-800/40 px-1.5 py-0.2 rounded">
-                        {item.storage_status}
+            {data.records.map((item) => {
+              const isSelected = selectedIds.includes(item.id);
+              return (
+                <div
+                  key={item.id}
+                  onClick={() => setSelectedItem(item)}
+                  className={`group bg-slate-900 border rounded-xl overflow-hidden transition-all duration-200 shadow-sm hover:shadow-lg flex flex-col cursor-pointer ${
+                    isSelected
+                      ? 'border-sky-500 ring-1 ring-sky-500/50 bg-slate-900/90'
+                      : 'border-slate-800/90 hover:border-sky-500/50 hover:shadow-sky-500/5'
+                  }`}
+                >
+                  {/* Thumbnail Image Box */}
+                  <div className="relative aspect-video bg-slate-950 overflow-hidden flex items-center justify-center border-b border-slate-800/80">
+                    <img
+                      src={getScreenshotImageUrl(item.id)}
+                      alt={item.original_filename}
+                      loading="lazy"
+                      className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                      <span className="p-2 bg-slate-900/90 text-white rounded-full border border-slate-700 shadow-md">
+                        <Maximize2 className="w-4 h-4" />
                       </span>
                     </div>
 
-                    <div className="text-[11px] text-sky-400 font-mono flex items-center gap-1 mt-1">
-                      <Clock className="w-3 h-3 text-sky-400/80" />
-                      <span>{formatToWIB(item.timestamp)}</span>
+                    {/* Selection Checkbox */}
+                    <button
+                      type="button"
+                      onClick={(e) => toggleSelectItem(item.id, e)}
+                      className={`absolute top-2 left-2 z-10 p-1 rounded-md backdrop-blur-xs transition-colors cursor-pointer ${
+                        isSelected
+                          ? 'bg-sky-600 text-white shadow'
+                          : 'bg-slate-950/80 text-slate-400 hover:text-white border border-slate-700/80'
+                      }`}
+                      title={isSelected ? 'Batalkan pilihan' : 'Pilih screenshot'}
+                    >
+                      {isSelected ? (
+                        <CheckSquare className="w-3.5 h-3.5" />
+                      ) : (
+                        <Square className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+
+                    {/* Device Tag Badge */}
+                    <div className="absolute top-2 left-9 px-2 py-0.5 rounded bg-slate-950/80 backdrop-blur-xs border border-slate-700/80 text-[10px] font-mono text-slate-200">
+                      {item.device_id}
+                    </div>
+
+                    {/* Quick Delete Action Button on Card */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setItemToDelete(item);
+                      }}
+                      className="absolute top-2 right-2 z-10 p-1.5 rounded-lg bg-slate-950/80 hover:bg-rose-900/90 text-slate-400 hover:text-rose-200 border border-slate-700/80 hover:border-rose-600 transition-all cursor-pointer shadow opacity-80 group-hover:opacity-100"
+                      title="Hapus screenshot ini"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* File Size */}
+                    <div className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-slate-950/80 backdrop-blur-xs text-[10px] font-mono text-slate-300">
+                      {formatBytes(item.file_size)}
                     </div>
                   </div>
 
-                  <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
-                    <span className="truncate text-slate-400 font-mono text-[10px]">
-                      {item.filename}
-                    </span>
-                    <span className="text-slate-400">
-                      {formatRelativeTime(item.timestamp)}
-                    </span>
+                  {/* Card Content */}
+                  <div className="p-3 flex-1 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <span className="font-medium text-slate-200 truncate pr-2" title={item.original_filename}>
+                          {item.original_filename}
+                        </span>
+                        <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-800/40 px-1.5 py-0.2 rounded">
+                          {item.storage_status}
+                        </span>
+                      </div>
+
+                      <div className="text-[11px] text-sky-400 font-mono flex items-center gap-1 mt-1">
+                        <Clock className="w-3 h-3 text-sky-400/80" />
+                        <span>{formatToWIB(item.timestamp)}</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+                      <span className="truncate text-slate-400 font-mono text-[10px] max-w-[150px]" title={item.filename}>
+                        {item.filename}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-400">
+                          {formatRelativeTime(item.timestamp)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setItemToDelete(item);
+                          }}
+                          className="p-1 hover:bg-rose-950/80 text-slate-500 hover:text-rose-300 rounded transition-colors cursor-pointer"
+                          title="Hapus foto"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           /* Table View */
@@ -382,6 +584,20 @@ export const ScreenshotsView: React.FC = () => {
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="bg-slate-950/80 border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[11px]">
+                  <th className="py-3 px-3 w-10 text-center">
+                    <button
+                      type="button"
+                      onClick={toggleSelectAll}
+                      className="cursor-pointer text-slate-400 hover:text-white"
+                      title="Pilih semua di halaman ini"
+                    >
+                      {data.records.length > 0 && selectedIds.length === data.records.length ? (
+                        <CheckSquare className="w-4 h-4 text-sky-400" />
+                      ) : (
+                        <Square className="w-4 h-4" />
+                      )}
+                    </button>
+                  </th>
                   <th className="py-3 px-4">Preview</th>
                   <th className="py-3 px-4">Nama Berkas</th>
                   <th className="py-3 px-3">Device ID</th>
@@ -392,53 +608,83 @@ export const ScreenshotsView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/70">
-                {data.records.map((item) => (
-                  <tr
-                    key={item.id}
-                    onClick={() => setSelectedItem(item)}
-                    className="hover:bg-slate-850/60 transition-colors cursor-pointer"
-                  >
-                    <td className="py-2 px-4 w-16">
-                      <div className="w-12 h-8 rounded bg-slate-950 border border-slate-800 overflow-hidden flex items-center justify-center">
-                        <img
-                          src={getScreenshotImageUrl(item.id)}
-                          alt={item.original_filename}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 font-mono">
-                      <div className="text-slate-100 font-medium">{item.original_filename}</div>
-                      <div className="text-[11px] text-slate-400 font-mono">{item.filename}</div>
-                    </td>
-                    <td className="py-3 px-3 font-mono text-slate-300">
-                      {item.device_id}
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="text-slate-200 font-medium">{formatDateOnlyWIB(item.timestamp)}</div>
-                      <div className="text-[11px] text-sky-400 font-mono">{formatTimeOnlyWIB(item.timestamp)}</div>
-                    </td>
-                    <td className="py-3 px-3 font-mono text-slate-300">
-                      {formatBytes(item.file_size)}
-                    </td>
-                    <td className="py-3 px-3">
-                      <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/60 text-emerald-400 border border-emerald-800/40">
-                        {item.storage_status}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedItem(item);
-                        }}
-                        className="text-sky-400 hover:text-sky-300 font-medium px-2 py-1 rounded hover:bg-sky-950/40"
-                      >
-                        Pratinjau
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {data.records.map((item) => {
+                  const isSelected = selectedIds.includes(item.id);
+                  return (
+                    <tr
+                      key={item.id}
+                      onClick={() => setSelectedItem(item)}
+                      className={`transition-colors cursor-pointer ${
+                        isSelected ? 'bg-sky-950/30 hover:bg-sky-950/40' : 'hover:bg-slate-850/60'
+                      }`}
+                    >
+                      <td className="py-2 px-3 text-center" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={(e) => toggleSelectItem(item.id, e)}
+                          className="cursor-pointer text-slate-400 hover:text-white"
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-sky-400" />
+                          ) : (
+                            <Square className="w-4 h-4" />
+                          )}
+                        </button>
+                      </td>
+                      <td className="py-2 px-4 w-16">
+                        <div className="w-12 h-8 rounded bg-slate-950 border border-slate-800 overflow-hidden flex items-center justify-center">
+                          <img
+                            src={getScreenshotImageUrl(item.id)}
+                            alt={item.original_filename}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 font-mono">
+                        <div className="text-slate-100 font-medium">{item.original_filename}</div>
+                        <div className="text-[11px] text-slate-400 font-mono">{item.filename}</div>
+                      </td>
+                      <td className="py-3 px-3 font-mono text-slate-300">
+                        {item.device_id}
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="text-slate-200 font-medium">{formatDateOnlyWIB(item.timestamp)}</div>
+                        <div className="text-[11px] text-sky-400 font-mono">{formatTimeOnlyWIB(item.timestamp)}</div>
+                      </td>
+                      <td className="py-3 px-3 font-mono text-slate-300">
+                        {formatBytes(item.file_size)}
+                      </td>
+                      <td className="py-3 px-3">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950/60 text-emerald-400 border border-emerald-800/40">
+                          {item.storage_status}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedItem(item);
+                            }}
+                            className="text-sky-400 hover:text-sky-300 font-medium px-2 py-1 rounded hover:bg-sky-950/40"
+                          >
+                            Pratinjau
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setItemToDelete(item);
+                            }}
+                            className="p-1.5 text-rose-400 hover:text-rose-200 hover:bg-rose-950/60 rounded border border-transparent hover:border-rose-800 transition-colors cursor-pointer"
+                            title="Hapus file screenshot"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -525,6 +771,15 @@ export const ScreenshotsView: React.FC = () => {
                   <span>Unduh</span>
                 </a>
                 <button
+                  type="button"
+                  onClick={() => setItemToDelete(selectedItem)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-950/70 hover:bg-rose-900/90 text-rose-300 border border-rose-800 text-xs transition-colors cursor-pointer"
+                  title="Hapus berkas foto dari disk VM dan metadata"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Hapus</span>
+                </button>
+                <button
                   onClick={() => setSelectedItem(null)}
                   className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
                 >
@@ -577,6 +832,147 @@ export const ScreenshotsView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Single Delete Confirmation Modal */}
+      {itemToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 shadow-2xl overflow-hidden flex flex-col">
+            <div className="flex items-center gap-3 pb-3 border-b border-slate-800 text-rose-400">
+              <div className="p-2 rounded-xl bg-rose-950/80 border border-rose-800/80">
+                <AlertTriangle className="w-5 h-5 text-rose-400" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-white">Konfirmasi Hapus File Screenshot</h3>
+                <p className="text-xs text-slate-400">Penghapusan fisik dari direktori disk VM</p>
+              </div>
+            </div>
+
+            <div className="py-4 space-y-3">
+              {/* Image Thumbnail & Details Preview */}
+              <div className="flex gap-3 bg-slate-950/80 p-3 rounded-xl border border-slate-800/80 items-center">
+                <div className="w-16 h-12 rounded-lg bg-black overflow-hidden shrink-0 border border-slate-800">
+                  <img
+                    src={getScreenshotImageUrl(itemToDelete.id)}
+                    alt={itemToDelete.original_filename}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <div className="flex-1 min-w-0 text-xs">
+                  <div className="font-medium text-slate-200 truncate" title={itemToDelete.original_filename}>
+                    {itemToDelete.original_filename}
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-mono truncate" title={itemToDelete.filename}>
+                    {itemToDelete.filename}
+                  </div>
+                  <div className="text-[10px] text-sky-400 font-mono mt-0.5">
+                    {formatToWIB(itemToDelete.timestamp)} &bull; {formatBytes(itemToDelete.file_size)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Warning box */}
+              <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-900/60 text-rose-200 text-xs leading-relaxed">
+                <p className="font-medium text-rose-300 mb-1 flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>Peringatan Permanen:</span>
+                </p>
+                File fisik gambar akan dihapus dari folder VM (<code className="font-mono text-rose-300 text-[11px] bg-rose-950 px-1 py-0.5 rounded">/srv/app-data/screenshots/</code>) dan metadata pada database akan dibersihkan. Tindakan tidak dapat dibatalkan.
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                disabled={deleteLoading}
+                onClick={() => setItemToDelete(null)}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={deleteLoading}
+                onClick={confirmSingleDelete}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium transition-colors cursor-pointer shadow-md disabled:opacity-50"
+              >
+                {deleteLoading ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Menghapus...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Ya, Hapus Sekarang</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Delete Confirmation Modal */}
+      {showBatchDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 shadow-2xl overflow-hidden flex flex-col">
+            <div className="flex items-center gap-3 pb-3 border-b border-slate-800 text-rose-400">
+              <div className="p-2 rounded-xl bg-rose-950/80 border border-rose-800/80">
+                <Trash2 className="w-5 h-5 text-rose-400" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-white">Hapus Massal Screenshot</h3>
+                <p className="text-xs text-slate-400">{selectedIds.length} berkas foto dipilih</p>
+              </div>
+            </div>
+
+            <div className="py-4 space-y-3">
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Anda akan menghapus <span className="font-bold text-white">{selectedIds.length} screenshot</span> secara sekaligus.
+              </p>
+
+              <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-900/60 text-rose-200 text-xs leading-relaxed">
+                <p className="font-medium text-rose-300 mb-1 flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>Peringatan Permanen:</span>
+                </p>
+                Semua berkas fisik yang sesuai akan dihapus dari direktori VM (<code className="font-mono text-rose-300 text-[11px] bg-rose-950 px-1 py-0.5 rounded">/srv/app-data/screenshots/</code>) dan database akan diperbarui. Tindakan ini tidak dapat dipulihkan.
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                disabled={deleteLoading}
+                onClick={() => setShowBatchDeleteModal(false)}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={deleteLoading}
+                onClick={confirmBatchDelete}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium transition-colors cursor-pointer shadow-md disabled:opacity-50"
+              >
+                {deleteLoading ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Menghapus {selectedIds.length} File...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Ya, Hapus Semua ({selectedIds.length}) File</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {/* Test Upload Modal */}
       {showUploadModal && (

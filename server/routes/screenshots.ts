@@ -3,13 +3,20 @@ import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
 import { requireAuth, AuthenticatedRequest } from '../auth.js';
-import { getScreenshotRecords, getScreenshotById, saveScreenshotMetadata } from '../db.js';
+import {
+  getScreenshotRecords,
+  getScreenshotById,
+  saveScreenshotMetadata,
+  deleteScreenshotRecord,
+  deleteScreenshotsBatchRecords,
+} from '../db.js';
 import {
   getStorageDir,
   generateUniqueFilename,
   getSafeFilePath,
   validateImageBuffer,
   getStorageStats,
+  deleteScreenshotFile,
   FALLBACK_DIR,
 } from '../storage.js';
 
@@ -368,4 +375,94 @@ router.get('/storage/status', requireAuth, (req: AuthenticatedRequest, res: Resp
   });
 });
 
+// DELETE /api/screenshots/:id
+// Delete a single screenshot: deletes physical file on disk and removes metadata from DB
+router.delete('/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ error: 'ID screenshot wajib disertakan.' });
+    }
+
+    // First fetch existing metadata to know exact filename
+    const item = await getScreenshotById(id);
+    if (!item) {
+      return res.status(404).json({ error: 'Screenshot tidak ditemukan atau sudah dihapus.' });
+    }
+
+    // 1. Delete physical image file from storage if present
+    let fileDeletionResult = { success: true, deleted: false, filePath: '' };
+    if (item.filename) {
+      fileDeletionResult = deleteScreenshotFile(item.filename) as any;
+    }
+
+    // 2. Delete database record
+    const dbResult = await deleteScreenshotRecord(id);
+
+    res.json({
+      success: true,
+      message: `Screenshot "${item.original_filename || item.filename}" berhasil dihapus.`,
+      id,
+      filename: item.filename,
+      physicalFileDeleted: fileDeletionResult.deleted,
+      dbRecordDeleted: dbResult.success,
+    });
+  } catch (err: any) {
+    console.error('[Delete Screenshot Error]', err);
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Gagal menghapus screenshot.',
+    });
+  }
+});
+
+// POST /api/screenshots/batch-delete
+// Delete multiple screenshots at once
+router.post('/batch-delete', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Daftar ID screenshot (array) wajib disertakan.' });
+    }
+
+    let deletedFilesCount = 0;
+    const deletedIds: string[] = [];
+    const errors: string[] = [];
+
+    for (const id of ids) {
+      try {
+        const item = await getScreenshotById(id);
+        if (item && item.filename) {
+          const fileRes = deleteScreenshotFile(item.filename);
+          if (fileRes.deleted) {
+            deletedFilesCount++;
+          }
+        }
+        const dbRes = await deleteScreenshotRecord(id);
+        if (dbRes.success) {
+          deletedIds.push(id);
+        }
+      } catch (itemErr: any) {
+        errors.push(`Gagal menghapus ID ${id}: ${itemErr.message}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `${deletedIds.length} screenshot berhasil dihapus dari sistem (${deletedFilesCount} file fisik dibersihkan dari disk).`,
+      deletedCount: deletedIds.length,
+      deletedIds,
+      deletedFilesCount,
+      errors: errors.length > 0 ? errors : undefined,
+    });
+  } catch (err: any) {
+    console.error('[Batch Delete Screenshot Error]', err);
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Gagal memproses penghapusan massal screenshot.',
+    });
+  }
+});
+
 export default router;
+
