@@ -1,0 +1,6 @@
+{
+  "name": "Device Activity Monitor Dashboard",
+  "description": "Minimalist web dashboard to monitor legitimate and consented device activity records with PostgreSQL and local VM screenshot storage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
